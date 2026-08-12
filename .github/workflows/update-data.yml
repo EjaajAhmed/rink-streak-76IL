@@ -1,0 +1,46 @@
+name: Update player data
+
+# Monthly refresh of web/public/players.json from the NHL API + Hockey Databank.
+# Pushing the updated file triggers a Vercel deploy automatically.
+on:
+  schedule:
+    - cron: "0 6 1 * *" # 06:00 UTC on the 1st of every month
+  workflow_dispatch: {} # allow manual runs from the Actions tab
+
+permissions:
+  contents: write # needed to commit the refreshed dataset
+
+concurrency:
+  group: update-data
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download Hockey Databank CSVs
+        run: bash etl/fetch_databank.sh
+
+      # --refresh re-pulls the NHL modern side. The script exits non-zero if the
+      # spot-checks fail, the player count collapses, or an established team's
+      # pool is empty — which fails the job here before anything is committed.
+      - name: Rebuild players.json
+        run: python3 etl/build_players.py --refresh
+
+      - name: Commit & push if the dataset changed
+        run: |
+          if git diff --quiet -- web/public/players.json; then
+            echo "No changes to players.json — nothing to deploy."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/public/players.json
+          git commit -m "chore(data): monthly players.json refresh"
+          git push
